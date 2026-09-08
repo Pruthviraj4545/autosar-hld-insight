@@ -46,10 +46,13 @@ class LLMClient:
 	def generate_answer(self, question: str, context_chunks: list[dict]) -> str:
 		context = self._format_context(context_chunks)
 		user_prompt = f"Context chunks:\n{context}\n\nQuestion:\n{question}"
+		return self.generate_text(user_prompt, self._system_prompt)
+
+	def generate_text(self, prompt: str, system_prompt: str, max_tokens: int | None = None) -> str:
 		response = self.client.messages.create(
 			model=self.model,
-			max_tokens=self.max_tokens,
-			system=self._system_prompt,
-			messages=[{"role": "user", "content": user_prompt}],
+			max_tokens=max_tokens or self.max_tokens,
+			system=system_prompt,
+			messages=[{"role": "user", "content": prompt}],
 		)
 		return response.content[0].text
