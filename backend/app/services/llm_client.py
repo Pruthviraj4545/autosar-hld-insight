@@ -48,10 +48,17 @@ class LLMClient:
 		user_prompt = f"Context chunks:\n{context}\n\nQuestion:\n{question}"
 		return self.generate_text(user_prompt, self._system_prompt)
 
-	def generate_text(self, prompt: str, system_prompt: str, max_tokens: int | None = None) -> str:
+	def generate_text(
+		self,
+		prompt: str,
+		system_prompt: str,
+		max_tokens: int | None = None,
+		response_format: dict | None = None,
+	) -> str:
 		response = self.client.chat.completions.create(
 			model=self.model,
 			max_tokens=max_tokens or self.max_tokens,
+			**({"response_format": response_format} if response_format else {}),
 			messages=[
 				{"role": "system", "content": system_prompt},
 				{"role": "user", "content": prompt},

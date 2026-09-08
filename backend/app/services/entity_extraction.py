@@ -5,36 +5,58 @@ from app.services.llm_client import LLMClient
 from app.services.vector_store import VectorStoreService
 
 
-BATCH_SIZE = 10
+BATCH_SIZE = 4
 EXTRACTION_SYSTEM_PROMPT = (
 	"Extract entities only from the supplied document chunks. "
-	"Return valid JSON only: an array of objects with exactly these fields: "
+	"Return a valid JSON object only with an 'entities' array. Each entity must "
+	"have exactly these fields: "
 	"component_name (string), interfaces (array of strings), "
 	"description (string). Do not invent entities or details."
 )
 INCONSISTENCY_SYSTEM_PROMPT = (
 	"Review the supplied repeated component or interface descriptions. "
-	"Return valid JSON only as an array of objects with exactly these fields: "
+	"Return a valid JSON object only with a 'issues' array. Each issue must "
+	"have exactly these fields: "
 	"entity_name (string), explanation (string), sources (array of objects with "
 	"chunk_id, heading, page_start, and page_end). Flag only likely mismatches."
 )
 MENTION_EXTRACTION_SYSTEM_PROMPT = (
 	"Extract named components or interfaces only from the supplied chunks. "
-	"Return valid JSON only as an array of objects with exactly these fields: "
+	"Return a valid JSON object only with an 'entities' array. Each entity must "
+	"have exactly these fields: "
 	"component_name (string), interfaces (array of strings), "
 	"description (string), source_chunk_ids (array of strings)."
 )
 
 
-def _parse_entities(response_text: str) -> list[dict]:
+def _parse_json_list(response_text: str, key: str = "entities") -> list[dict]:
 	cleaned = response_text.strip()
 	cleaned = re.sub(r"^```(?:json)?\s*|\s*```$", "", cleaned, flags=re.IGNORECASE)
-	parsed = json.loads(cleaned)
+	try:
+		parsed = json.loads(cleaned)
+	except json.JSONDecodeError:
+		return []
 	if isinstance(parsed, dict):
-		parsed = parsed.get("entities", [])
+		parsed = parsed.get(key, [])
 	if not isinstance(parsed, list):
-		raise ValueError("LLM entity response must be a JSON array")
+		return []
 	return [entity for entity in parsed if isinstance(entity, dict)]
+
+
+def _parse_entities(response_text: str) -> list[dict]:
+	return _parse_json_list(response_text, "entities")
+
+
+def _generate_json(llm_client: LLMClient, prompt: str, system_prompt: str) -> str:
+	try:
+		return llm_client.generate_text(
+			prompt,
+			system_prompt,
+			max_tokens=1500,
+			response_format={"type": "json_object"},
+		)
+	except TypeError:
+		return llm_client.generate_text(prompt, system_prompt)
 
 
 def _merge_entities(entity_batches: list[list[dict]]) -> list[dict]:
@@ -94,7 +116,7 @@ def extract_entities(project_id: str) -> dict:
 			for chunk in batch
 		)
 		prompt = f"Document chunks:\n{context}\n\nExtract the entities as JSON."
-		batches.append(_parse_entities(llm_client.generate_text(prompt, EXTRACTION_SYSTEM_PROMPT)))
+		batches.append(_parse_entities(_generate_json(llm_client, prompt, EXTRACTION_SYSTEM_PROMPT)))
 
 	return {"project_id": project_id, "entities": _merge_entities(batches)}
 
@@ -118,9 +140,7 @@ def find_inconsistencies(project_id: str) -> list[dict]:
 			"Extract every named component or interface and its description from "
 			f"these chunks. Include source_chunk_ids for each mention.\n\n{context}"
 		)
-		for entity in _parse_entities(
-			llm_client.generate_text(prompt, MENTION_EXTRACTION_SYSTEM_PROMPT)
-		):
+		for entity in _parse_entities(_generate_json(llm_client, prompt, MENTION_EXTRACTION_SYSTEM_PROMPT)):
 			entity["source_chunk_ids"] = entity.get("source_chunk_ids", [])
 			mentions.append(entity)
 
@@ -140,8 +160,9 @@ def find_inconsistencies(project_id: str) -> list[dict]:
 		return []
 
 	comparison = json.dumps(candidates, indent=2)
-	response = llm_client.generate_text(
+	response = _generate_json(
+		llm_client,
 		f"Repeated entities with differing descriptions:\n{comparison}",
 		INCONSISTENCY_SYSTEM_PROMPT,
 	)
-	return _parse_entities(response)
+	return _parse_json_list(response, "issues")

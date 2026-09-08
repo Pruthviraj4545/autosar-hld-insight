@@ -9,3 +9,4 @@ pymupdf
 sqlalchemy
 streamlit
 python-multipart
+requests

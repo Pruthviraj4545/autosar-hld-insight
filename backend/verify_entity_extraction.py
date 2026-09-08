@@ -34,7 +34,7 @@ extraction.VectorStoreService = FakeVectorStore
 extraction.LLMClient = FakeLLM
 result = extraction.extract_entities("project-1")
 
-assert FakeLLM.calls == 2
+assert FakeLLM.calls == 3
 assert result["entities"] == [
     {
         "component_name": "Engine",
