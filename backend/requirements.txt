@@ -1,0 +1,11 @@
+python-dotenv
+pydantic-settings
+fastapi
+uvicorn
+chromadb
+sentence-transformers
+anthropic
+pymupdf
+sqlalchemy
+streamlit
+python-multipart
