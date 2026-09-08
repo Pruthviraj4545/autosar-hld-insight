@@ -4,7 +4,7 @@ fastapi
 uvicorn
 chromadb
 sentence-transformers
-anthropic
+groq
 pymupdf
 sqlalchemy
 streamlit

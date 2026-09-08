@@ -4,7 +4,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-	anthropic_api_key: str
+	groq_api_key: str
 	embedding_model_name: str = "all-MiniLM-L6-v2"
 	chroma_persist_dir: str = "../data/vector_store"
 	sqlite_db_path: str = "../data/app.db"

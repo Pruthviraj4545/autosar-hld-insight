@@ -12,6 +12,18 @@ EXTRACTION_SYSTEM_PROMPT = (
 	"component_name (string), interfaces (array of strings), "
 	"description (string). Do not invent entities or details."
 )
+INCONSISTENCY_SYSTEM_PROMPT = (
+	"Review the supplied repeated component or interface descriptions. "
+	"Return valid JSON only as an array of objects with exactly these fields: "
+	"entity_name (string), explanation (string), sources (array of objects with "
+	"chunk_id, heading, page_start, and page_end). Flag only likely mismatches."
+)
+MENTION_EXTRACTION_SYSTEM_PROMPT = (
+	"Extract named components or interfaces only from the supplied chunks. "
+	"Return valid JSON only as an array of objects with exactly these fields: "
+	"component_name (string), interfaces (array of strings), "
+	"description (string), source_chunk_ids (array of strings)."
+)
 
 
 def _parse_entities(response_text: str) -> list[dict]:
@@ -51,20 +63,26 @@ def _merge_entities(entity_batches: list[list[dict]]) -> list[dict]:
 	return list(merged.values())
 
 
-def extract_entities(project_id: str) -> dict:
+def _load_chunks(project_id: str) -> list[dict]:
 	collection = VectorStoreService().create_or_get_collection(project_id)
 	stored = collection.get(include=["documents", "metadatas"])
-	documents = stored.get("documents") or []
-	metadatas = stored.get("metadatas") or []
-	chunks = [
+	return [
 		{
 			"text": document,
+			"chunk_id": metadata.get("chunk_id", f"chunk-{index}"),
 			"heading": metadata.get("heading", "Unknown"),
 			"page_start": metadata.get("page_start", 0),
 			"page_end": metadata.get("page_end", 0),
 		}
-		for document, metadata in zip(documents, metadatas)
+		for index, (document, metadata) in enumerate(
+			zip(stored.get("documents") or [], stored.get("metadatas") or []),
+			start=1,
+		)
 	]
+
+
+def extract_entities(project_id: str) -> dict:
+	chunks = _load_chunks(project_id)
 
 	llm_client = LLMClient()
 	batches = []
@@ -79,3 +97,51 @@ def extract_entities(project_id: str) -> dict:
 		batches.append(_parse_entities(llm_client.generate_text(prompt, EXTRACTION_SYSTEM_PROMPT)))
 
 	return {"project_id": project_id, "entities": _merge_entities(batches)}
+
+
+def find_inconsistencies(project_id: str) -> list[dict]:
+	chunks = _load_chunks(project_id)
+	if not chunks:
+		return []
+
+	llm_client = LLMClient()
+	mentions = []
+	for start in range(0, len(chunks), BATCH_SIZE):
+		batch = chunks[start : start + BATCH_SIZE]
+		context = "\n\n".join(
+			f"Chunk ID: {chunk['chunk_id']}\n"
+			f"Section: {chunk['heading']} (p.{chunk['page_start']}-{chunk['page_end']})\n"
+			f"Text: {chunk['text']}"
+			for chunk in batch
+		)
+		prompt = (
+			"Extract every named component or interface and its description from "
+			f"these chunks. Include source_chunk_ids for each mention.\n\n{context}"
+		)
+		for entity in _parse_entities(
+			llm_client.generate_text(prompt, MENTION_EXTRACTION_SYSTEM_PROMPT)
+		):
+			entity["source_chunk_ids"] = entity.get("source_chunk_ids", [])
+			mentions.append(entity)
+
+		# The extraction prompt may return the source field even though older
+		# model responses omit it; omitted provenance cannot form a comparison.
+	by_name: dict[str, list[dict]] = {}
+	for mention in mentions:
+		name = str(mention.get("component_name", "")).strip()
+		if name and mention.get("source_chunk_ids"):
+			by_name.setdefault(name.casefold(), []).append(mention)
+	candidates = []
+	for group in by_name.values():
+		descriptions = {str(item.get("description", "")).strip() for item in group}
+		if len(descriptions) > 1:
+			candidates.append(group)
+	if not candidates:
+		return []
+
+	comparison = json.dumps(candidates, indent=2)
+	response = llm_client.generate_text(
+		f"Repeated entities with differing descriptions:\n{comparison}",
+		INCONSISTENCY_SYSTEM_PROMPT,
+	)
+	return _parse_entities(response)

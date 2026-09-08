@@ -4,9 +4,9 @@ from app.core.config import settings
 
 
 class LLMClient:
-	"""Generate grounded answers with the Anthropic Messages API."""
+	"""Generate grounded answers with the Groq chat completions API."""
 
-	model = "claude-sonnet-4-6"
+	model = "openai/gpt-oss-120b"
 	max_tokens = 1000
 
 	_system_prompt = (
@@ -19,9 +19,9 @@ class LLMClient:
 
 	def __init__(self, client: Any | None = None, api_key: str | None = None) -> None:
 		if client is None:
-			from anthropic import Anthropic
+			from groq import Groq
 
-			client = Anthropic(api_key=api_key or settings.anthropic_api_key)
+			client = Groq(api_key=api_key or settings.groq_api_key)
 		self.client = client
 
 	@staticmethod
@@ -49,10 +49,12 @@ class LLMClient:
 		return self.generate_text(user_prompt, self._system_prompt)
 
 	def generate_text(self, prompt: str, system_prompt: str, max_tokens: int | None = None) -> str:
-		response = self.client.messages.create(
+		response = self.client.chat.completions.create(
 			model=self.model,
 			max_tokens=max_tokens or self.max_tokens,
-			system=system_prompt,
-			messages=[{"role": "user", "content": prompt}],
+			messages=[
+				{"role": "system", "content": system_prompt},
+				{"role": "user", "content": prompt},
+			],
 		)
-		return response.content[0].text
+		return response.choices[0].message.content
